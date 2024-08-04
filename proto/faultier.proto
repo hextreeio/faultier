@@ -1,0 +1,146 @@
+syntax = "proto3";
+
+enum FaultierVersion {
+    FAULTIER_VERSION_ZERO = 0;
+    FAULTIER_VERSION = 1;
+}
+
+enum Commands {
+    CMD_RESET = 0;
+    CMD_GLITCH = 1;
+    CMD_CAPTURE = 2;
+}
+
+enum TriggerSource {
+    TRIGGER_IN_NONE = 0;
+    TRIGGER_IN_EXT0 = 1;
+    TRIGGER_IN_EXT1 = 2;
+}
+
+enum GlitchOutput {
+    OUT_CROWBAR = 0;
+    OUT_MUX0 = 1;
+    OUT_MUX1 = 2;
+    OUT_MUX2 = 3;
+    OUT_EXT0 = 4;
+    OUT_EXT1 = 5;
+    OUT_NONE = 6;
+}
+
+enum TriggersType {
+    TRIGGER_NONE = 0;
+    TRIGGER_HIGH = 1;
+    TRIGGER_LOW = 2;
+    TRIGGER_RISING_EDGE = 3;
+    TRIGGER_FALLING_EDGE = 4;
+    TRIGGER_PULSE_POSITIVE = 5;
+    TRIGGER_PULSE_NEGATIVE = 6;
+}
+
+enum ADCSource {
+    ADC_CROWBAR = 0;
+    ADC_MUX0 = 1;
+    ADC_EXT1 = 2;
+}
+
+enum AuxFunction {
+    AUX_NONE = 0;
+    AUX_UART = 1;
+    AUX_SWD_CHECKER = 2;
+    AUX_SWD_PROBE = 3;
+}
+
+message CaptureResponse {
+    bytes data = 1;
+}
+
+message CommandHello {}
+
+message CommandCapture {}
+
+message CommandGlitch {}
+
+enum SWDCheckFunction {
+    SWD_CHECK_ENABLED = 0;
+    SWD_CHECK_NRF52 = 1;
+}
+
+enum TriggerPullConfiguration {
+    TRIGGER_PULL_NONE = 0;
+    TRIGGER_PULL_UP = 1;
+    TRIGGER_PULL_DOWN = 2;
+}
+
+message CommandSWDCheck {
+    SWDCheckFunction function = 1;
+}
+
+message CommandConfigureGlitcher {
+    GlitchOutput power_cycle_output = 7;
+    int32 power_cycle_length = 8;
+    TriggersType trigger_type = 1;
+    int32 delay = 2;
+    int32 pulse = 3;
+    TriggerSource trigger_source = 4;
+    GlitchOutput glitch_output = 5;
+    TriggerPullConfiguration trigger_pull_configuration = 6;
+}
+
+message CommandConfigureADC {
+    ADCSource source = 1;
+    int32 sample_count = 2;
+}
+
+message CommandReadADC {
+}
+
+message Command {
+    oneof cmd {
+        CommandHello hello = 1;
+        CommandConfigureGlitcher configure_glitcher = 2;
+        CommandConfigureADC configure_adc = 3;
+        CommandCapture capture = 4;
+        CommandGlitch glitch = 5;
+        CommandReadADC read_adc = 6;
+        CommandSWDCheck swd_check = 7;
+    }
+}
+
+message ResponseOk {
+
+}
+
+message ResponseError {
+    string message = 1;
+}
+
+message ResponseHello {
+    FaultierVersion version = 1;
+}
+
+message ResponseTriggerTimeout {
+}
+
+message ResponseADC {
+    bytes samples = 1;
+    //int32 test = 2;
+}
+
+message ResponseInfo {
+    int32 frequency = 1;
+}
+
+message ResponseSWDCheck {
+    bool enabled = 1;
+}
+
+message Response {
+    oneof type {
+        ResponseOk ok = 1;
+        ResponseError error = 2;
+        ResponseHello hello = 3;
+        ResponseADC adc = 4;
+        ResponseTriggerTimeout trigger_timeout = 5;
+        ResponseSWDCheck swd_check = 6;
+    }
+}
