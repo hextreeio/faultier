@@ -14,6 +14,13 @@ Afterwards, make sure that you have the **latest** version of the Python library
 pip3 install -U faultier
 ```
 
+## ValueError: Invalid header received: b''
+
+This error can have multiple sources. It mainly means: The Faultier does not respond as we expect it to. There was a bug with earlier versions of the Faultier Python library (especially on Windows) opening the wrong serial device. This has been fixed. If you often hit this on Windows, update the Python library as described above.
+
+Sometimes Faultier might just crash or have an issue - hit the reset button and click again :-) 
+
+If the issue persists, please contact us on our Discord!
 
 ## MacOS troubleshooting
 
@@ -37,6 +44,12 @@ at file "embedded:startup.tcl", line 28
 ```
 brew tap stacksmashing/homebrew-tap
 brew install --HEAD stacksmashing/tap/openocd-tamarin
+```
+
+**If you have it already installed you need to upgrade it with this commmand:**
+
+```
+brew upgrade stacksmashing/tap/openocd-tamarin --fetch-HEAD
 ```
 
 ## Linux troubleshooting
