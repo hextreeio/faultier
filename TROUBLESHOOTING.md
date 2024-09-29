@@ -22,6 +22,10 @@ Sometimes Faultier might just crash or have an issue - hit the reset button and 
 
 If the issue persists, please contact us on our Discord!
 
+## Ensure that pip3 and Python3 are up to date
+
+Please ensure that both your pip as well as your Python is up to date. Older pip versions sometimes have dependency resolution issues (i.e. taking hours to figure out the dependencies).
+
 ## MacOS troubleshooting
 
 ### OpenOCD can't find faultier.cfg
