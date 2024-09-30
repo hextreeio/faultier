@@ -818,6 +818,26 @@ int main()
                         // putchar('A');
                         break;
                 }
+                case Command_io_get_state_tag:
+                {
+                    CommandIOGetState io_get_cmd = command.cmd.io_get_state;
+                    int8_t pin = PIN_IO_BASE + io_get_cmd.pin;
+                    gpio_init(pin);
+                    gpio_set_dir(pin, GPIO_IN);
+                    bool state = gpio_get(pin);
+                    protocol_response_io_get_state(state);
+                }
+                break;
+                case Command_io_set_state_tag:
+                {
+                    CommandIOSetState io_set_cmd = command.cmd.io_set_state;
+                    int8_t pin = PIN_IO_BASE + io_set_cmd.pin;
+                    gpio_init(pin);
+                    gpio_set_dir(pin, GPIO_OUT);
+                    gpio_put(pin, io_set_cmd.state);
+                    protocol_ok();
+                    break;
+                }
             }
             break;
             default:

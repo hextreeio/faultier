@@ -68,6 +68,22 @@ void protocol_response_adc(uint8_t * adc_buffer, size_t adc_buffer_size) {
     protocol_response_adc_(&stdoutstream, adc_buffer, adc_buffer_size);
 }
 
+size_t protocol_response_io_get_state_(pb_ostream_t *stream, IOState state) {
+    ResponseIOGetState response = ResponseIOGetState_init_zero;
+    response.state = state;
+    Response resp = Response_init_zero;
+    resp.which_type = Response_io_get_state_tag;
+    resp.type.io_get_state = response;
+    pb_encode(stream, Response_fields, &resp);
+    return stream->bytes_written;
+
+}
+void protocol_response_io_get_state(bool state) {
+    pb_ostream_t sizestream = {0};
+    write_header(protocol_response_io_get_state_(&sizestream, state));
+    pb_ostream_t stdoutstream = {&callback, NULL, SIZE_MAX, 0};
+    protocol_response_io_get_state_(&stdoutstream, state);
+}
 
 size_t protocol_error_(pb_ostream_t *stream, char *message) {
     ResponseError err = ResponseError_init_zero;
