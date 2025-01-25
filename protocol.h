@@ -1,6 +1,7 @@
 #include <stdlib.h>
 
 size_t protocol_response_adc(uint8_t * adc_buffer, size_t adc_buffer_size);
+void protocol_response_io_get_state(bool state);
 void protocol_error(char *message);
 void protocol_ok();
 void protocol_hello();

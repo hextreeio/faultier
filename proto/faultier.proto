@@ -37,6 +37,19 @@ enum TriggersType {
     TRIGGER_PULSE_NEGATIVE = 6;
 }
 
+enum IOPin{
+    PIN0 = 0;
+    PIN1 = 1;
+    PIN2 = 2;
+    PIN3 = 3;
+    PIN4 = 4;
+    PIN5 = 5;
+    PIN6 = 6;
+    PIN7 = 7;
+    PIN8 = 8;
+    PIN9 = 9;
+}
+
 enum ADCSource {
     ADC_CROWBAR = 0;
     ADC_MUX0 = 1;
@@ -71,6 +84,11 @@ enum TriggerPullConfiguration {
     TRIGGER_PULL_DOWN = 2;
 }
 
+enum IOState {
+    LOW = 0;
+    HIGH = 1;
+}
+
 message CommandSWDCheck {
     SWDCheckFunction function = 1;
 }
@@ -103,8 +121,11 @@ message Command {
         CommandGlitch glitch = 5;
         CommandReadADC read_adc = 6;
         CommandSWDCheck swd_check = 7;
+        CommandIOGetState io_get_state= 8;
+        CommandIOSetState io_set_state = 9;
     }
 }
+
 
 message ResponseOk {
 
@@ -142,5 +163,19 @@ message Response {
         ResponseADC adc = 4;
         ResponseTriggerTimeout trigger_timeout = 5;
         ResponseSWDCheck swd_check = 6;
+        ResponseIOGetState io_get_state = 7;
     }
+}
+
+message CommandIOSetState{
+    IOPin pin = 1;
+    IOState state = 2;
+}
+
+message CommandIOGetState{
+    IOPin pin = 1;
+}
+
+message ResponseIOGetState {
+    IOState state = 1;
 }
