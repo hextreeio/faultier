@@ -28,7 +28,7 @@
 #define serprint(...)
 
 #if (TUSB_VERSION_MAJOR == 0) && (TUSB_VERSION_MINOR <= 12)
-#define tud_vendor_flush(x) ((void)0)
+#define tud_vendor_n_flush(x, y) ((void)0)
 #endif
 
 #define TAMARIN_RESET_IMPLEMENTED 1
@@ -37,8 +37,8 @@
 void vuprintf(const char* format, va_list args) {
     char buf[128];
     vsnprintf(buf, 128, format, args);
-    tud_cdc_n_write_str(1, buf);
-    tud_cdc_n_write_flush(1);
+    tud_cdc_n_write_str(0, buf);
+    tud_cdc_n_write_flush(0);
     tud_task();
 }
 
@@ -410,17 +410,17 @@ void probe_handle_pkt(void)
     res.data = data;
     res.res = result;
 
-    tud_vendor_write((char *)&res, sizeof(res));
-    tud_vendor_flush();
+    tud_vendor_n_write(1, (char *)&res, sizeof(res));
+    tud_vendor_n_flush(1);
 }
 
 // USB bits
 void tamarin_probe_task(void)
 {
-    if (tud_vendor_available())
+    if (tud_vendor_n_available(1))
     {
         char tmp_buf[64];
-        uint count = tud_vendor_read(tmp_buf, 64);
+        uint count = tud_vendor_n_read(1, tmp_buf, 64);
         if (count == 0)
         {
             return;

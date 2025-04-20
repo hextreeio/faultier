@@ -357,7 +357,7 @@ void writeout(const uint8_t *buf, size_t len)
 {
 
     while(true) {
-        uint32_t available = tud_cdc_n_write_available(0);
+        uint32_t available = tud_vendor_n_write_available(0);
         if(available == 0) {
             tud_task();
             continue;
@@ -365,12 +365,12 @@ void writeout(const uint8_t *buf, size_t len)
 
         tud_task();
         if(len < available) {
-            tud_cdc_n_write(0, buf, len);
+            tud_vendor_n_write(0, buf, len);
             len = 0;
-            tud_cdc_n_write_flush(0);
+            tud_vendor_n_write_flush(0);
         } else {
-            tud_cdc_n_write(0, buf, available);
-            tud_cdc_n_write_flush(0);
+            tud_vendor_n_write(0, buf, available);
+            tud_vendor_n_write_flush(0);
             buf += available;
             len -= available;
         }
@@ -385,13 +385,14 @@ bool readin(uint8_t *buf, size_t len)
 {
     for (int i = 0; i < len; i++)
     {
-        int32_t c = -1;
-        while(c == -1) {
-            tud_task();
-            c = tud_cdc_n_read_char(0);
+        int r = 0;
+        char data;
+        while (r != 1) {
+            r = tud_vendor_n_read(0, &data, 1);
+            
         }
-
-        buf[i] = c & 0xFF;
+        
+        buf[i] = data & 0xFF;
     }
 
     return true;
@@ -458,9 +459,9 @@ uint32_t current_baud = 115200;
 uart_parity_t current_parity = UART_PARITY_NONE;
 
 void uart_task(void) {
-    if(tud_cdc_n_connected(1)) {
+    if(tud_cdc_n_connected(0)) {
         cdc_line_coding_t coding;
-        tud_cdc_n_get_line_coding (1, &coding);
+        tud_cdc_n_get_line_coding (0, &coding);
         if(coding.bit_rate != current_baud) {
             current_baud = coding.bit_rate;
             uart_init(uart1, current_baud);
@@ -476,16 +477,21 @@ void uart_task(void) {
             // cls(false);
             // pprintf("UART READABLE!");
             char uart_buf;
-            uart_read_blocking(uart1, &uart_buf, 1);
-            tud_cdc_n_write_char(1, uart_buf);
-            tud_cdc_n_write_flush(1);
+            uint32_t value = uart_get_hw(uart1)->dr;
+            if(value & UART_UARTDR_FE_BITS) {
+                // Ignore framing errors
+            } else {
+                uart_buf = value & 0xFF;
+                tud_cdc_n_write_char(0, uart_buf);
+            }
+            tud_cdc_n_write_flush(0);
         }
-        if(tud_cdc_n_available(1)) {
+        if(tud_cdc_n_available(0)) {
             // cls(false);
             // pprintf("USB AVAILABLE!");
-            size_t available = tud_cdc_n_available(1);
+            size_t available = tud_cdc_n_available(0);
             while(available) {
-                char usb_in = tud_cdc_n_read_char(1);
+                char usb_in = tud_cdc_n_read_char(0);
                 uart_putc_raw(uart1, usb_in);
                 available--;
             }
@@ -552,7 +558,7 @@ int main()
         tud_task();
         tamarin_probe_task();
         uart_task();
-        if(tud_cdc_n_available(0)) {
+        if(tud_vendor_n_available(0)) {
             if (!readin(serbuf, 4))
             {
                 continue;
