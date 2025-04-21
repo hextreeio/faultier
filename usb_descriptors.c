@@ -15,7 +15,7 @@
  *   [MSB]       MIDI | HID | MSC | CDC          [LSB]
  */
 #define _PID_MAP(itf, n)  ( (CFG_TUD_##itf) << (n) )
-#define USB_PID 0xfffe
+#define USB_PID 0xfffd
 // #define USB_PID           (0x4000 | _PID_MAP(CDC, 0) | _PID_MAP(MSC, 1) | _PID_MAP(HID, 2) | \
 //                            _PID_MAP(MIDI, 3) | _PID_MAP(VENDOR, 4) )
 
@@ -102,10 +102,15 @@ enum
 
 /* 3. Total length: 2×Vendor + 1×CDC (no IAD needed for vendor) --------- */
 #define CONFIG_TOTAL_LEN  ( TUD_CONFIG_DESC_LEN       \
+                          + 8 + 8 \
                           + 2 * TUD_VENDOR_DESC_LEN   \
                           +      TUD_CDC_DESC_LEN )
 
 /* 4. Full configuration descriptor array ------------------------------ */
+
+/* The interface association below is required for pyusb/libusb1 to
+   be able to talk to the Faultier on Windows. We assign WinUSB to the two
+   vendor interfaces, but libusb1 can only use those if they use IAD. */
 uint8_t const desc_fs_configuration[] =
 {
   /* Config number, interface count, string index, total length,
@@ -114,10 +119,14 @@ uint8_t const desc_fs_configuration[] =
                         CONFIG_TOTAL_LEN,
                         TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
 
+  /* Interface Association for vendor interface 1 */
+  8, TUSB_DESC_INTERFACE_ASSOCIATION, ITF_NUM_VENDOR, 1, TUSB_CLASS_VENDOR_SPECIFIC, 0x0, 0x0, 0,
+
   /* 1  First vendor interface (replaces the old CDC_0 pair) */
   TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, 0,
                         EPNUM_VENDOR0_OUT, EPNUM_VENDOR0_IN, 64),
-
+  /* Interface Association for vendor interface 1 */
+  8, TUSB_DESC_INTERFACE_ASSOCIATION, ITF_NUM_PROBE, 1, TUSB_CLASS_VENDOR_SPECIFIC, 0x0, 0x0, 0,
   /* 2  Existing Picoprobe vendor interface — unchanged        */
   TUD_VENDOR_DESCRIPTOR(ITF_NUM_PROBE, 0,
                         EPNUM_PROBE_OUT, EPNUM_PROBE_IN, 64),
