@@ -34,11 +34,13 @@ void board_init(void);
 struct adc_configuration {
     ADCSource source;
     uint32_t sample_count;
+    uint32_t clock_division;
 };
 
 struct adc_configuration adc_config = {
     .source = ADCSource_ADC_CROWBAR,
-    .sample_count = 1000
+    .sample_count = 2000,
+    .clock_division = 1
 };
 
 struct glitcher_configuration {
@@ -124,7 +126,7 @@ static inline void prepare_adc()
     *vreg = 0x820;
 
     // Init GPIO for analogue use: hi-Z, no pulls, disable digital input buffer.
-    adc_gpio_init(adc->pin);
+    // adc_gpio_init(adc->pin);
 
     adc_init();
     adc_select_input(adc->adc_channel);
@@ -142,7 +144,12 @@ static inline void prepare_adc()
     // cycles, so in general you want a divider of 0 (hold down the button
     // continuously) or > 95 (take samples less frequently than 96 cycle
     // intervals). This is all timed by the 48 MHz ADC clock.
-    adc_set_clkdiv(0);
+    if(adc_config.clock_division == 1) {
+        adc_set_clkdiv(0);
+    } else {
+        adc_set_clkdiv(96.0 * adc_config.clock_division);
+    }
+    
 
     // printf("Arming DMA\n");
     // Set up the DMA to start transferring data as soon as it appears in FIFO
@@ -168,7 +175,22 @@ static inline void prepare_adc()
 
 static inline void capture_adc()
 {
- 
+  const struct faultier_adc *adc;
+    switch(adc_config.source) {
+        case ADCSource_ADC_CROWBAR:
+            adc = &FT_ADC_CROWBAR;
+            break;
+        case ADCSource_ADC_MUX0:
+            adc = &FT_ADC_MUX;
+            break;
+        case ADCSource_ADC_EXT1:
+            adc = &FT_ADC_EXT;
+            break;
+    }
+
+    // Init GPIO for analogue use: hi-Z, no pulls, disable digital input buffer.
+    adc_gpio_init(adc->pin);
+    
     // printf("Starting capture\n");
     adc_run(true);
 
@@ -334,6 +356,7 @@ void setup_simple_glitcher()
 
         sm_config_set_set_pins(&c, glitch_pin, 1);
         pio_gpio_init(pio0, glitch_pin);
+        gpio_set_drive_strength(glitch_pin, GPIO_DRIVE_STRENGTH_12MA);
         pio_sm_set_consecutive_pindirs(pio0, 0, glitch_pin, 1, true);
     }
 
@@ -635,10 +658,16 @@ int main()
                     CommandConfigureADC ac = command.cmd.configure_adc;
                     if(ac.sample_count > 30000) {
                         protocol_error("Maximum sample count is 30000");
+                        
+                        continue;
+                    }
+                    if(ac.clock_division < 1) {
+                        protocol_error("Clock division needs to be larger or equal to 1");
                         continue;
                     }
                     adc_config.source = ac.source;
                     adc_config.sample_count = ac.sample_count;
+                    adc_config.clock_division = ac.clock_division;
                     protocol_ok();
                 }
                 break;
@@ -660,13 +689,13 @@ int main()
 
 
 
-                prepare_adc();
+                
                 // pulse
                 if(glitcher.glitch_output != GlitchOutput_OUT_NONE) {
                     pio_sm_put_blocking(pio0, 0, glitcher.pulse);
                 }
                 
-
+                prepare_adc();
                 // Trigger timeout. Ca. 1 second currently.
                 uint trigger_start_millis = to_ms_since_boot(get_absolute_time());
                 bool trigger_timed_out = false;
@@ -695,7 +724,7 @@ int main()
                         continue;
                     }
                 }
-
+                
                 capture_adc();
                 
                 

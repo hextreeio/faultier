@@ -24,8 +24,6 @@
 #include "tusb.h"
 // #include "util.h"
 
-// Disable all prints for now
-#define serprint(...)
 
 #if (TUSB_VERSION_MAJOR == 0) && (TUSB_VERSION_MINOR <= 12)
 #define tud_vendor_n_flush(x, y) ((void)0)
@@ -52,16 +50,16 @@ void uprintf(const char* format, ...) {
 
 #if false
 #define tamarin_debug(format,args...) uprintf(format, ## args)
+#define tamarin_info(format,args...) uprintf(format, ## args)
+#define serprint(format, args...) uprintf(format, ## args)
 #else
 #define tamarin_debug(format,...) ((void)0)
-#endif
-
-#if false
-#define tamarin_info(format,args...) uprintf(format, ## args)
-#else
 #define tamarin_info(format,...) ((void)0)
+// Disable all prints for now
+#define serprint(...)
 #endif
 
+// #define serprint(format, args...) uprintf(format, ## args)
 enum TAMARIN_CMDS
 {
     TAMARIN_INVALID = 0, // Invalid command
@@ -300,6 +298,8 @@ int __not_in_flash_func(tamarin_tx_read_bare)(uint8_t request, uint32_t *value)
         }
         if (result != 1)
         {
+            serprint("Read != 1\r\n");
+            *value = 0x99999999;
             return result;
         }
         break;
@@ -373,19 +373,19 @@ void probe_handle_pkt(void)
 
     tamarin_debug("Processing packet: ID: %u Command: %u Request: 0x%02X Data: 0x%08X Idle: %d\r\n", cmd->id, cmd->cmd, cmd->request, cmd->data, cmd->idle_cycles);
     int result = 0;
-    uint32_t data;
+    uint32_t data = 0x99999999;
     switch (cmd->cmd)
     {
     case TAMARIN_READ:
         tamarin_debug("Executing read\r\n");
 
         result = tamarin_tx_read_bare(cmd->request, &data);
-        tamarin_debug("Read: %d 0x%08X", result, data);
+        tamarin_debug("Read: %d 0x%08X\r\n", result, data);
         break;
     case TAMARIN_WRITE:
         tamarin_debug("Executing write\r\n");
         result = tamarin_tx_write_bare(cmd->request, cmd->data);
-        tamarin_debug("Write: %d 0x%08X", result, cmd->data);
+        tamarin_debug("Write: %d 0x%08X\r\n", result, cmd->data);
         break;
     case TAMARIN_LINE_RESET:
         tamarin_debug("Executing line reset\r\n");

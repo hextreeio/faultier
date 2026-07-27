@@ -2,7 +2,7 @@ syntax = "proto3";
 
 enum FaultierVersion {
     FAULTIER_VERSION_ZERO = 0;
-    FAULTIER_VERSION = 1;
+    FAULTIER_VERSION = 2;
 }
 
 enum Commands {
@@ -89,6 +89,7 @@ message CommandConfigureGlitcher {
 message CommandConfigureADC {
     ADCSource source = 1;
     int32 sample_count = 2;
+    int32 clock_division = 3;
 }
 
 message CommandReadADC {
@@ -98,7 +99,7 @@ message Command {
     oneof cmd {
         CommandHello hello = 1;
         CommandConfigureGlitcher configure_glitcher = 2;
-        CommandConfigureADC configure_adc = 3;
+        CommandConfigureADC configure_adc = 8;
         CommandCapture capture = 4;
         CommandGlitch glitch = 5;
         CommandReadADC read_adc = 6;
