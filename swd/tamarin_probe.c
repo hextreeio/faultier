@@ -22,6 +22,7 @@
 // #include "tamarin_hw.h"
 #include "probe.pio.h"
 #include "tusb.h"
+#include "swd/tamarin_probe.h"
 // #include "util.h"
 
 
@@ -60,15 +61,20 @@ void uprintf(const char* format, ...) {
 #endif
 
 // #define serprint(format, args...) uprintf(format, ## args)
-enum TAMARIN_CMDS
-{
-    TAMARIN_INVALID = 0, // Invalid command
-    TAMARIN_READ = 1,
-    TAMARIN_WRITE = 2,
-    TAMARIN_LINE_RESET = 3,
-    TAMARIN_SET_FREQ = 4,
-    TAMARIN_RESET = 5
-};
+
+// Number of SWCLK cycles the bus is left undriven when ownership changes between
+// the host and the target. This is the ADIv5 reset/default turnaround period.
+#define SWD_TURNAROUND_CYCLES 1
+
+// Idle cycles driven low before every packet request. A few idle cycles keep the
+// line quiet between transfers; anything beyond this is requested per command by
+// the host through tamarin_cmd_hdr.idle_cycles.
+#define SWD_LEADING_IDLE_CYCLES 8
+
+// How often a transfer is retried locally when the target answers WAIT. Retrying on
+// the probe avoids a USB round trip per retry; if the target is still not ready
+// afterwards the host is told so it can abort the transfer.
+#define SWD_MAX_WAIT_RETRIES 8
 
 // This struct is the direct struct that is sent to
 // the probe.
@@ -90,11 +96,12 @@ struct __attribute__((__packed__)) tamarin_cmd_hdr
 // This is the struture returned by the probe for each command
 struct __attribute__((__packed__)) tamarin_res_hdr
 {
-    // Unused
+    // Echo of tamarin_cmd_hdr.id, so the host can detect a lost or duplicated
+    // response instead of silently pairing data with the wrong command.
     uint8_t id;
-    // The (3 bit) result: OK/WAIT/FAULT
+    // One of TAMARIN_STATUS
     uint8_t res;
-    // The data for reads (undefined otherwise)
+    // The data for successful reads, 0 otherwise
     uint32_t data;
 };
 
@@ -113,17 +120,40 @@ struct _probe
 
 static struct _probe probe;
 
-void probe_set_swclk_freq(uint freq_khz)
+bool probe_set_swclk_freq(uint freq_khz)
 {
-    tamarin_info("Setting SWD frequency to %d kHz\r\n", freq_khz);
+    // The PIO program uses two cycles per SWD clock, so the usable range is
+    // clk_sys/2 down to clk_sys/(2*65535).
     uint clk_sys_freq_khz = clock_get_hz(clk_sys) / 1000;
+    if (freq_khz == 0 || freq_khz > clk_sys_freq_khz)
+    {
+        tamarin_info("Rejecting SWD frequency of %d kHz\r\n", freq_khz);
+        return false;
+    }
+
+    tamarin_info("Setting SWD frequency to %d kHz\r\n", freq_khz);
     // Worked out with saleae
     uint32_t divider = clk_sys_freq_khz / freq_khz / 2;
+    if (divider < 1)
+    {
+        divider = 1;
+    }
+    if (divider > 65535)
+    {
+        divider = 65535;
+    }
     pio_sm_set_clkdiv_int_frac(pio1, PROBE_SM, divider, 0);
+    return true;
 }
 
 inline void probe_write_bits(uint bit_count, uint32_t data_byte)
 {
+    // The PIO loop counter is bit_count - 1, so a zero length burst would clock out
+    // 2^32 bits and never return.
+    if (bit_count == 0 || bit_count > 32)
+    {
+        return;
+    }
 
     serprint(">> %X (%d)\r\n", data_byte, bit_count);
     pio_sm_put_blocking(pio1, PROBE_SM, bit_count - 1);
@@ -133,6 +163,11 @@ inline void probe_write_bits(uint bit_count, uint32_t data_byte)
 
 uint32_t tamarin_probe_read_bits(uint bit_count)
 {
+    if (bit_count == 0 || bit_count > 32)
+    {
+        return 0;
+    }
+
     pio_sm_put_blocking(pio1, PROBE_SM, bit_count - 1);
     uint32_t data = pio_sm_get_blocking(pio1, PROBE_SM);
     data = data >> (32 - bit_count);
@@ -236,20 +271,64 @@ void tamarin_probe_deinit()
     
 }
 
-int __not_in_flash_func(tamarin_tx_read_bare)(uint8_t request, uint32_t *value);
+int __not_in_flash_func(tamarin_tx_read_bare)(uint8_t request, uint32_t *value, uint8_t idle_cycles);
 
-void tamarin_line_reset()
+// Drive `cycles` idle clocks with SWDIO low. Idle cycles after a transfer give the
+// DP time to complete it, which is what keeps a target from answering WAIT to
+// everything that follows.
+static void __not_in_flash_func(swd_idle_cycles)(uint cycles)
+{
+    if (cycles == 0)
+    {
+        return;
+    }
+
+    tamarin_probe_write_mode();
+    while (cycles > 0)
+    {
+        uint chunk = (cycles > 32) ? 32 : cycles;
+        probe_write_bits(chunk, 0);
+        cycles -= chunk;
+    }
+}
+
+// Send a packet request and sample the acknowledge.
+//
+// Neither side drives the bus during the turnaround period, so SWDIO is switched to
+// an input before the turnaround clock rather than parking it high. A target that
+// does not respond at all leaves the line pulled up and shows up as an ACK of 0b111.
+static uint32_t __not_in_flash_func(swd_packet_request)(uint8_t request)
 {
     tamarin_probe_write_mode();
+    swd_idle_cycles(SWD_LEADING_IDLE_CYCLES);
+    probe_write_bits(8, request);
+
+    tamarin_probe_read_mode();
+    tamarin_probe_read_bits(SWD_TURNAROUND_CYCLES);
+    return tamarin_probe_read_bits(3);
+}
+
+int tamarin_line_reset(uint32_t *idcode)
+{
+    tamarin_probe_write_mode();
+    // At least 50 clocks with SWDIO high, the JTAG-to-SWD select sequence, then
+    // another line reset so the DP ends up in a known state either way.
     probe_write_bits(32, 0xFFFFFFFF);
     probe_write_bits(32, 0xFFFFFFFF);
     probe_write_bits(16, 0xe79e);
     probe_write_bits(32, 0xFFFFFFFF);
     probe_write_bits(32, 0xFFFFFFFF);
-    // probe_write_bits(8, 0x0);
-    uint32_t foo;
-    tamarin_tx_read_bare(0xa5, &foo);
+
+    // A line reset must be followed by a read of DP IDCODE before any other
+    // transfer, otherwise the DP ignores everything that comes next.
+    uint32_t value = 0;
+    int status = tamarin_tx_read_bare(0xa5, &value, SWD_LEADING_IDLE_CYCLES);
+    if (idcode != NULL)
+    {
+        *idcode = value;
+    }
     tamarin_probe_read_mode();
+    return status;
 }
 
 void tamarin_reset()
@@ -264,106 +343,90 @@ void tamarin_reset()
     #endif
 }
 
-int __not_in_flash_func(tamarin_tx_read_bare)(uint8_t request, uint32_t *value)
+// Read an AP or DP register.
+//
+// On the wire: request (8) | turnaround | ACK (3) | data (32) | parity (1) | turnaround.
+// A WAIT or FAULT acknowledge aborts the transfer straight after the ACK: there is no
+// data phase unless overrun detection is enabled in DP CTRL/STAT, which the host does
+// not do. Clocking a data phase anyway - as this used to - leaves the probe and the
+// target disagreeing about where the next packet request starts.
+int __not_in_flash_func(tamarin_tx_read_bare)(uint8_t request, uint32_t *value, uint8_t idle_cycles)
 {
+    *value = 0;
 
-    // uint8_t data_reversed = reverse(request);
-    uint32_t result;
-    for (int i = 0; i < 5; i++)
+    for (unsigned attempt = 0; attempt < SWD_MAX_WAIT_RETRIES; attempt++)
     {
-        serprint("Read loop\r\n");
-        tamarin_probe_write_mode();
+        uint32_t ack = swd_packet_request(request);
 
-        // Idle cycles just in case
-        probe_write_bits(32, 0x0);
-
-        // probe_write_bits(32, 0x0);
-        probe_write_bits(32, 0x0);
-        probe_write_bits(32, 0x0);
-        probe_write_bits(32, 0x0);
-
-        probe_write_bits(8, request);
-        // Read parity bit
-        probe_write_bits(1, 1);
-        tamarin_probe_read_mode();
-        result = tamarin_probe_read_bits(3);
-        if (result == 2)
+        if (ack == TAMARIN_STATUS_OK)
         {
-            serprint("Read - Probe received wait. Try: %d\r\n", i);
-            // because we probably have overrun on we need to perform a
-            // data phase.
             uint32_t read_data = tamarin_probe_read_bits(32);
-            uint32_t result_parity = tamarin_probe_read_bits(1);
-            continue;
+            uint32_t read_parity = tamarin_probe_read_bits(1);
+            tamarin_probe_read_bits(SWD_TURNAROUND_CYCLES);
+            swd_idle_cycles(idle_cycles);
+
+            *value = read_data;
+            serprint("READ - OK Data: %08X (%d)\r\n", read_data, read_parity);
+            if (read_parity != (uint32_t)__builtin_parity(read_data))
+            {
+                serprint("READ - parity error\r\n");
+                return TAMARIN_STATUS_PARITY_ERROR;
+            }
+            return TAMARIN_STATUS_OK;
         }
-        if (result != 1)
+
+        // No data phase follows a WAIT or FAULT, only the turnaround back to us.
+        tamarin_probe_read_bits(SWD_TURNAROUND_CYCLES);
+        swd_idle_cycles(idle_cycles);
+
+        if (ack != TAMARIN_STATUS_WAIT)
         {
-            serprint("Read != 1\r\n");
-            *value = 0x99999999;
-            return result;
+            serprint("READ - ack %d\r\n", ack);
+            return (int)ack;
         }
-        break;
+        serprint("READ - WAIT, retry %d\r\n", attempt);
     }
 
-    uint32_t read_data = tamarin_probe_read_bits(32);
-    uint32_t result_parity = tamarin_probe_read_bits(1);
-    *value = read_data;
-    serprint("READ - Result: %d Data: %08X (%d)\r\n", result, read_data, result_parity);
-    return result;
+    return TAMARIN_STATUS_WAIT;
 }
 
-int __not_in_flash_func(tamarin_tx_write_bare)(uint8_t request, uint32_t value)
+// Write an AP or DP register.
+//
+// On the wire: request (8) | turnaround | ACK (3) | turnaround | data (32) | parity (1).
+// As for reads, a WAIT or FAULT acknowledge means the data phase is skipped entirely.
+int __not_in_flash_func(tamarin_tx_write_bare)(uint8_t request, uint32_t value, uint8_t idle_cycles)
 {
     uint32_t value_parity = __builtin_parity(value);
-    uint32_t result;
-    for (int i = 0; i < 5; i++)
+
+    for (unsigned attempt = 0; attempt < SWD_MAX_WAIT_RETRIES; attempt++)
     {
-        serprint("Write loop\r\n");
-        tamarin_probe_write_mode();
+        uint32_t ack = swd_packet_request(request);
 
-        // Idle cycles... These can be reduced
-        probe_write_bits(32, 0x0);
-        probe_write_bits(32, 0x0);
-        probe_write_bits(32, 0x0);
-        probe_write_bits(32, 0x0);
+        // The target releases the bus after the ACK whether or not a data phase follows.
+        tamarin_probe_read_bits(SWD_TURNAROUND_CYCLES);
 
-        probe_write_bits(8, request);
-
-        // Read parity bit
-        probe_write_bits(1, 1);
-
-        tamarin_probe_read_mode();
-        result = tamarin_probe_read_bits(3);
-        if (result == 2)
+        if (ack == TAMARIN_STATUS_OK)
         {
-            serprint("Write - Probe received wait. Try: %d\r\n", i);
-            // With overrun detection we still have to do the datapahse
             tamarin_probe_write_mode();
-            // turn
-            probe_write_bits(1, 0x1);
-            probe_write_bits(32, 0x0);
-            probe_write_bits(1, 0x1);
-            // uint32_t result_parity = tamarin_probe_read_bits(1);
-            continue;
+            probe_write_bits(32, value);
+            probe_write_bits(1, value_parity);
+            swd_idle_cycles(idle_cycles);
+
+            serprint("WRITE - OK Data: %08X\r\n", value);
+            return TAMARIN_STATUS_OK;
         }
-        if (result != 1)
+
+        swd_idle_cycles(idle_cycles);
+
+        if (ack != TAMARIN_STATUS_WAIT)
         {
-            return result;
+            serprint("WRITE - ack %d\r\n", ack);
+            return (int)ack;
         }
-        break;
+        serprint("WRITE - WAIT, retry %d\r\n", attempt);
     }
 
-    // Another turn!
-    tamarin_probe_write_mode();
-    probe_write_bits(1, 1);
-    // Write the actual data
-    probe_write_bits(32, value);
-    // Write parity bit
-    probe_write_bits(1, value_parity);
-
-    tamarin_probe_read_mode();
-    serprint("READ - Result: %d\r\n", result);
-    return result;
+    return TAMARIN_STATUS_WAIT;
 }
 
 bool probe_enabled = false;
@@ -372,28 +435,34 @@ void probe_handle_pkt(void)
     struct tamarin_cmd_hdr *cmd = &probe.probe_cmd;
 
     tamarin_debug("Processing packet: ID: %u Command: %u Request: 0x%02X Data: 0x%08X Idle: %d\r\n", cmd->id, cmd->cmd, cmd->request, cmd->data, cmd->idle_cycles);
-    int result = 0;
-    uint32_t data = 0x99999999;
+    int result = TAMARIN_STATUS_OK;
+    uint32_t data = 0;
     switch (cmd->cmd)
     {
     case TAMARIN_READ:
         tamarin_debug("Executing read\r\n");
 
-        result = tamarin_tx_read_bare(cmd->request, &data);
+        result = tamarin_tx_read_bare(cmd->request, &data, cmd->idle_cycles);
         tamarin_debug("Read: %d 0x%08X\r\n", result, data);
         break;
     case TAMARIN_WRITE:
         tamarin_debug("Executing write\r\n");
-        result = tamarin_tx_write_bare(cmd->request, cmd->data);
+        result = tamarin_tx_write_bare(cmd->request, cmd->data, cmd->idle_cycles);
         tamarin_debug("Write: %d 0x%08X\r\n", result, cmd->data);
         break;
     case TAMARIN_LINE_RESET:
         tamarin_debug("Executing line reset\r\n");
-        tamarin_line_reset();
+        // The status is that of the DP IDCODE read the reset ends with, and the
+        // IDCODE itself is handed back in the data field.
+        result = tamarin_line_reset(&data);
+        tamarin_debug("Line reset: %d IDCODE 0x%08X\r\n", result, data);
         break;
     case TAMARIN_SET_FREQ:
         tamarin_debug("Executing set frequency\r\n");
-        probe_set_swclk_freq(cmd->data);
+        if (!probe_set_swclk_freq(cmd->data))
+        {
+            result = TAMARIN_STATUS_BAD_ARGUMENT;
+        }
         break;
     case TAMARIN_RESET:
         tamarin_debug("Executing RESET\r\n");
@@ -401,14 +470,14 @@ void probe_handle_pkt(void)
         break;
     default:
         tamarin_debug("UNKNOWN COMMAND!\r\n");
+        result = TAMARIN_STATUS_UNKNOWN_COMMAND;
         break;
     }
 
-    // For now we just reply with a default command
     struct tamarin_res_hdr res;
-    res.id = 33;
+    res.id = cmd->id;
     res.data = data;
-    res.res = result;
+    res.res = (uint8_t)result;
 
     tud_vendor_n_write(1, (char *)&res, sizeof(res));
     tud_vendor_n_flush(1);
@@ -417,11 +486,15 @@ void probe_handle_pkt(void)
 // USB bits
 void tamarin_probe_task(void)
 {
-    if (tud_vendor_n_available(1))
+    // Commands are fixed size, so consume them one at a time and leave a partially
+    // received command in the FIFO until the rest of it arrives. Reading a whole USB
+    // packet and only looking at the first command would drop the others on the floor
+    // and leave the host waiting for responses that never come.
+    while (tud_vendor_n_available(1) >= sizeof(struct tamarin_cmd_hdr))
     {
-        char tmp_buf[64];
-        uint count = tud_vendor_n_read(1, tmp_buf, 64);
-        if (count == 0)
+        uint8_t tmp_buf[sizeof(struct tamarin_cmd_hdr)];
+        uint32_t count = tud_vendor_n_read(1, tmp_buf, sizeof(tmp_buf));
+        if (count != sizeof(struct tamarin_cmd_hdr))
         {
             return;
         }
